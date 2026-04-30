@@ -109,35 +109,43 @@ export const updateCdekLocation = ({ address, regionCode }) => {
     instance.params.servicePath = servicePath;
     instance.params.defaultLocation = address;
     instance.cdekApi.servicePath = servicePath;
+    const additionalParams = {};
+    if (widgetParams.sender) {
+      additionalParams.is_handout_only = false;
+      additionalParams.is_reception = true;
+    } else {
+      additionalParams.is_handout = true;
+    }
+    // Без этого при поиске перестает работать выбор региона.
+    instance.cdekApi.getOfficesAbort = null;
     instance.cdekApi
-      .fetchOfficePage({ is_handout: true }, 1, 1)
+      .fetchOfficePage(additionalParams, 0, 500)
       .then((r) => {
-        const additionalParams = {};
-        if (widgetParams.sender) {
-          additionalParams.is_handout_only = false;
-          additionalParams.is_reception = true;
-        } else {
-          additionalParams.is_handout = true;
+        const totalElements = parseInt(r.headers.get("x-total-elements"));
+        const firstPageData = r.data;
+
+        console.log(r.data);
+        // Если заголовка нет или элементов мало — возвращаем только первую страницу
+        if (isNaN(totalElements) || totalElements <= 500) {
+          return [firstPageData];
         }
 
-        if (!r.headers.has("x-total-elements")) {
-          return Promise.all([
+        const totalPages = Math.ceil(totalElements / 500);
+
+        // Создаем массив промисов для ОСТАЛЬНЫХ страниц (начиная с индекса 1)
+        const otherPagesPromises = Array.from(
+          { length: totalPages - 1 },
+          (_, i) =>
             instance.cdekApi
-              .fetchOfficePage(additionalParams, 0, null)
+              .fetchOfficePage(additionalParams, i + 1, 500)
               .then((r2) => r2.data),
-          ]);
-        }
-        return Promise.all(
-          Array.from(
-            {
-              length: Math.ceil(parseInt(r.headers["x-total-elements"]) / 500),
-            },
-            (_e, i) =>
-              instance.cdekApi
-                .fetchOfficePage({ is_handout: true }, i, 500)
-                .then((r2) => r2.data),
-          ),
         );
+
+        // Соединяем данные первой страницы с остальными
+        return Promise.all(otherPagesPromises).then((otherPagesData) => [
+          firstPageData,
+          ...otherPagesData,
+        ]);
       })
       .then((o) =>
         o.map((r) => (typeof r === "string" ? JSON.parse(r) : r)).flat(),
